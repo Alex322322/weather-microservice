@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/Alex322322/weather-microservice/internal/client/http/geocoding"
+	"github.com/Alex322322/weather-microservice/internal/client/http/openmeteo"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-co-op/gocron/v2"
@@ -18,12 +21,36 @@ func main() {
 	// server
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
+
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+	geocodingClient := geocoding.NewClient(httpClient)
+	openmeteoClient := openmeteo.NewClient(httpClient)
+
 	r.Get("/{city}", func(w http.ResponseWriter, r *http.Request) {
 		city := chi.URLParam(r, "city")
 
 		fmt.Printf("requested city: %s\n", city)
 
-		_, err := w.Write([]byte("welcome 1231231"))
+		geoResp, err := geocodingClient.GetCords(city)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		openResp, err := openmeteoClient.GetTemp(geoResp.Longitude, geoResp.Latitude)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		raw, err := json.Marshal(openResp)
+		if err != nil {
+			log.Println(err)
+		}
+
+		_, err = w.Write(raw)
 		if err != nil {
 			log.Println(err)
 		}
