@@ -6,10 +6,20 @@ import (
 	"net/http"
 )
 
+
+// создаем обертку
 type client struct {
 	httpClient *http.Client
 }
 
+// возвращаем экземпляр клиента
+func NewClient(httpClient *http.Client) *client {
+	return &client{
+		httpClient: httpClient,
+	}
+}
+
+// структура для декодирования
 type Response struct {
 	Current struct {
 		Time          string  `json:"time"`
@@ -17,13 +27,7 @@ type Response struct {
 	} //`json:"current"`
 }
 
-//const geoUrl = "https://geocoding-api.open-meteo.com/v1/search?name=%s&count=1&language=en&format=json"
 
-func NewClient(httpClient *http.Client) *client {
-	return &client{
-		httpClient: httpClient,
-	}
-}
 
 func (c *client) GetTemp(longitude, latitude float64) (Response, error) {
 	resp, err := c.httpClient.Get(
@@ -35,10 +39,13 @@ func (c *client) GetTemp(longitude, latitude float64) (Response, error) {
 
 	defer resp.Body.Close()
 
+	// проверка кода ответа
 	if resp.StatusCode != http.StatusOK {
 		return Response{}, fmt.Errorf("status code: %d", resp.StatusCode)
 	}
 
+
+	// преобразуем JSON
 	var response Response
 	err = json.NewDecoder(resp.Body).Decode(&response)
 	if err != nil {
