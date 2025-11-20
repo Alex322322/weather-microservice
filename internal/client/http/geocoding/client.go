@@ -18,6 +18,10 @@ func NewClient(httpClient *http.Client) *client {
 	}
 }
 
+type GeoClient interface {
+	GetCords(city string) (Response, error)
+}
+
 // структура для декодирования
 type Response struct {
 	Name      string  `json:"name"`
@@ -52,6 +56,11 @@ func (c *client) GetCords(city string) (Response, error) {
 	err = json.NewDecoder(resp.Body).Decode(&geoResp)
 	if err != nil {
 		return Response{}, err
+	}
+
+	// проверка пустого ответа
+	if len(geoResp.Results) == 0 {
+    	return Response{}, fmt.Errorf("city not found: %s", city)
 	}
 
 	return geoResp.Results[0], nil

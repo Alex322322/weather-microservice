@@ -1,0 +1,8 @@
+http:
+  port: 3000
+
+postgres:
+  url: postgres://user:pass@localhost:5432/weather_db
+
+cron:
+  interval: 60s
