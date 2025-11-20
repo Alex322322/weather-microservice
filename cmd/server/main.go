@@ -2,129 +2,197 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
+	httpapi "github.com/Alex322322/weather-microservice/internal/client/http"
 	"github.com/Alex322322/weather-microservice/internal/client/http/geocoding"
 	"github.com/Alex322322/weather-microservice/internal/client/http/openmeteo"
+	scheduler "github.com/Alex322322/weather-microservice/internal/cron"
 	"github.com/Alex322322/weather-microservice/internal/repository/postgres"
-	"github.com/Alex322322/weather-microservice/internal/repository/postgres/pgMethods"
-	"github.com/Alex322322/weather-microservice/internal/repository/postgres/pgxconfig"
+	"github.com/Alex322322/weather-microservice/internal/service/weather"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-co-op/gocron/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joho/godotenv"
 )
 
 const (
 	httpPort = ":3000"
 )
 
-
 func main() {
-	// настройка маршрутизатора
-	r := chi.NewRouter()
-	// настройка middleware обработчика, работающая для всех endpoint
-	r.Use(middleware.Logger)
+	// загрузка переменных окружения из .env файла
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatalf("Error loading .env file %s", err)
+	}
 
 	ctx := context.Background()
 
 	// urlExample := "postgres://username:password@localhost:5432/database_name"
 	connPool, err := pgxpool.NewWithConfig(ctx, postgres.Config())
 	if err != nil {
-		log.Fatal("Error while creating connection to the database!")
+		log.Fatalf("Error while creating connection db pool: %s", err)
 	}
-
-	conn, err := connPool.Acquire(ctx)
-	if err != nil {
-		log.Fatal("Error while acquiring connection from the database pool!")
-	}
-	defer conn.Release()
-
-	err = conn.Ping(ctx)
-	if err!=nil{
-		log.Fatal("Could not ping database")
-	}
-
- 	fmt.Println("Connected to the database!!")
-
-	postgres.CreateTableQuery(ctx, connPool)
-
 	defer connPool.Close()
 
+	fmt.Println("Connected to the database!!")
+
+	err = postgres.CreateTableQuery(ctx, connPool)
+	if err != nil {
+		log.Fatalf("schema init error: %v", err)
+	}
+
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	geocodingClient := geocoding.NewClient(httpClient)
+	openmeteoClient := openmeteo.NewClient(httpClient)
+
+	repo := postgres.NewRepository(connPool)
+
+	svc := weather.NewService(geocodingClient, openmeteoClient, repo)
+	s := scheduler.NewScheduler(svc)
+	//err := gocron.NewScheduler()
+	//if err != nil {
+	//	panic(err)
+	//}
+
+	// настройка маршрутизатора
+	r := chi.NewRouter()
+	// настройка middleware обработчика, работающая для всех endpoint
+	r.Use(middleware.Logger)
+
+	h := httpapi.NewHandler(svc)
+	h.RegisterRoutes(r)
+
 	// настройка обработки по пути city
-	r.Get("/{city}", func(w http.ResponseWriter, r *http.Request) {
-		// достаем city из маршрутизатора
-		cityName := chi.URLParam(r, "city")
-		
-		data := postgres.SelectLastQuery(ctx, connPool, w, cityName)
+	/*
+		r.Get("/{city}", func(w http.ResponseWriter, r *http.Request) {
+			// достаем city из маршрутизатора
+			cityName := chi.URLParam(r, "city")
 
-		raw, err := json.Marshal(data)
-		if err != nil {
-			log.Println(err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("internal server error"))
-			return
-		}
+			data := postgres.SelectLastQuery(ctx, connPool, w, cityName)
 
-		_, err = w.Write(raw)
-		if err != nil {
-			log.Println(err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("internal server error"))
-			return
-		}
-	})
+			raw, err := json.Marshal(data)
+			if err != nil {
+				log.Println(err)
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte("internal server error"))
+				return
+			}
+
+			_, err = w.Write(raw)
+			if err != nil {
+				log.Println(err)
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte("internal server error"))
+				return
+			}
+		})*/
 
 	// создаем scheduler
-	s, err := gocron.NewScheduler()
-	if err != nil {
-		panic(err)
-	}
+	//s, err := gocron.NewScheduler()
+	//if err != nil {
+	//	panic(err)
+	//}
 
-	jobs, err := createJobs(ctx, s, connPool, cityName)
-	if err != nil {
-		panic(err)
-	}
+	//s.Start()
+	//fmt.Println("Scheduler started")
 
-	var wg sync.WaitGroup
+	//js := make([]gocron.Job, 0)
 
-	wg.Go(func() {
-		// поднимаем сервер, блокирующий запуск
-		fmt.Println("Starting HTTP server on port:", httpPort)
-		err := http.ListenAndServe(httpPort, r)
-		if err != nil {
-			panic(err) // топ приложения
-		}
-	})
+	/*
+		r.Post("/schedule/{city}", func(w http.ResponseWriter, r *http.Request) {
+			city := chi.URLParam(r, "city")
+
+			fmt.Println("Jobs before: ", js)
+			jobs, err := createJobs(ctx, s, connPool, city)
+			if err != nil {
+				http.Error(w, "could not schedule job", 500)
+				return
+			}
+			// Optionally store jobs somewhere
+			fmt.Println("Jobs created: ", jobs)
+			js = append(js, jobs...)
+			fmt.Println("Jobs after: ", js)
+			w.Write([]byte(fmt.Sprintf("Scheduled job for %s", city)))
+		})*/
+
+	//jobs, err := createJobs(ctx, s, connPool, cityName)
+	//if err != nil {
+	//	panic(err)
+	//}
+
+	//var wg sync.WaitGroup
+
+	//wg.Go(func() {
+	// поднимаем сервер, блокирующий запуск
+	//	fmt.Println("Starting HTTP server on port:", httpPort)
+	//	err := http.ListenAndServe(httpPort, r)
+	//	if err != nil {
+	//		panic(err) // топ приложения
+	//	}
+	//})
 
 	//fmt.Println(jobs)
 
-	wg.Go(func() {
-		fmt.Printf("Starting job: %s\n", jobs[0].ID())
-		s.Start()
+	//wg.Go(func() {
+	//	fmt.Printf("Starting job: %s\n", js)
+	//	s.Start()
+	//	fmt.Println("after start")
+	// block until you are ready to shut down
+	//select {
+	//case <-time.After(time.Minute):
+	//}
 
-		// block until you are ready to shut down
-		select {
-		case <-time.After(time.Minute):
+	// when you're done, shut it down
+	//err = s.Shutdown()
+	//if err != nil {
+	// handle error
+	//}
+	//})
+
+	//wg.Wait()
+	//defer s.Shutdown()
+
+	srv := &http.Server{
+		Addr:    ":3000",
+		Handler: r,
+	}
+
+	// graceful shutdown
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("ListenAndServe(): %v", err)
 		}
+	}()
+	log.Println("server started on :3000")
 
-		// when you're done, shut it down
-		err = s.Shutdown()
-		if err != nil {
-			// handle error
-		}
-	})
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("shutting down...")
 
-	wg.Wait()
+	ctxShut, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
+	if err := srv.Shutdown(ctxShut); err != nil {
+		log.Fatalf("server shutdown failed:%+v", err)
+	}
+
+	s.Stop()
+	log.Println("server exiting")
 }
 
+/*
 // функция создания Job
 func createJobs(ctx context.Context, sheduler gocron.Scheduler, p *pgxpool.Pool, city string) ([]gocron.Job, error) {
 	// создаем httpClient с таймаутом
@@ -136,7 +204,7 @@ func createJobs(ctx context.Context, sheduler gocron.Scheduler, p *pgxpool.Pool,
 
 	j, err := sheduler.NewJob(
 		gocron.DurationJob(
-			10*time.Second,
+			30*time.Second,
 		),
 		gocron.NewTask(
 			func() {
@@ -151,11 +219,11 @@ func createJobs(ctx context.Context, sheduler gocron.Scheduler, p *pgxpool.Pool,
 					log.Println(err)
 					return
 				}
-				
-				timeStamp, err :=  time.Parse("2006-01-02T15:04", openResp.Current.Time)
+
+				timeStamp, err := time.Parse("2006-01-02T15:04", openResp.Current.Time)
 				if err != nil {
 					log.Println(err)
-					return 
+					return
 				}
 
 				postgres.InsertQuery(ctx, p, city, timeStamp, openResp.Current.Temperature2m)
@@ -167,21 +235,6 @@ func createJobs(ctx context.Context, sheduler gocron.Scheduler, p *pgxpool.Pool,
 	if err != nil {
 		return nil, err
 	}
-
 	return []gocron.Job{j}, nil
 }
-
-
-func GetCityHandler(repo postgres.Repository) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        cityName := chi.URLParam(r, "city")
-
-        data, err := repo.SelectLastQuery(r.Context(), cityName)
-        if err != nil {
-            http.Error(w, "internal error", 500)
-            return
-        }
-
-        json.NewEncoder(w).Encode(data)
-    }
-}
+*/

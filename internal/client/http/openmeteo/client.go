@@ -27,6 +27,9 @@ type Response struct {
 	} //`json:"current"`
 }
 
+type MeteoClient interface {
+	GetTemp(longitude, latitude float64) (Response, error)
+}
 
 
 func (c *client) GetTemp(longitude, latitude float64) (Response, error) {
