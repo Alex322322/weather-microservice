@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-co-op/gocron/v2"
+	"github.com/jackc/pgx/v5"
 )
 
 const (
@@ -21,14 +23,12 @@ const (
 )
 
 type Data struct {
-	Timestamp time.Time
-	Temperature float64
+	Name string `db:"name"`
+	Timestamp time.Time `db:"forecast_time"`
+	Temperature float64 `db:"temperature"`
 }
 
-type Storage struct {
-	data map[string][]Data
-	mu sync.RWMutex
-}
+
 
 func main() {
 	// настройка маршрутизатора
@@ -36,10 +36,16 @@ func main() {
 	// настройка middleware обработчика, работающая для всех endpoint
 	r.Use(middleware.Logger)
 
-	//
-	storage := &Storage{
-		data: make(map[string][]Data),
+	ctx := context.Background()
+
+	// urlExample := "postgres://username:password@localhost:5432/database_name"
+	conn, err := pgx.Connect(ctx, "postgres://user:pass@localhost:5432/weather_db")
+	if err != nil {
+		//fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
+		//os.Exit(1)
+		panic(err)
 	}
+	defer conn.Close(ctx)
 
 	// настройка обработки по пути city
 	r.Get("/{city}", func(w http.ResponseWriter, r *http.Request) {
@@ -47,15 +53,23 @@ func main() {
 		cityName := chi.URLParam(r, "city")
 
 		fmt.Printf("requested city: %s\n", cityName)
-
-		storage.mu.RLock()
-		defer storage.mu.RUnlock()
-
-		data, ok := storage.data[cityName]
-		if !ok {
-			w.WriteHeader(http.StatusNotFound)
+		
+		query := `
+			SELECT name,
+       			forecast_time,
+       			temperature
+			FROM public.forecast
+			WHERE name = $1
+			ORDER BY forecast_time DESC
+			LIMIT 1;
+		`
+		var data Data
+		err = conn.QueryRow(ctx, query, city).Scan(&data.Name, &data.Timestamp, &data.Temperature)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+
 
 		// 
 		raw, err := json.Marshal(data)
@@ -75,7 +89,7 @@ func main() {
 		panic(err)
 	}
 
-	jobs, err := createJobs(s, storage)
+	jobs, err := createJobs(ctx, s, conn)
 	if err != nil {
 		panic(err)
 	}
@@ -114,10 +128,10 @@ func main() {
 }
 
 // функция создания Job
-func createJobs(sheduler gocron.Scheduler, storage *Storage) ([]gocron.Job, error) {
+func createJobs(ctx context.Context, sheduler gocron.Scheduler, conn *pgx.Conn) ([]gocron.Job, error) {
 	// создаем httpClient с таймаутом
 	httpClient := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: 60 * time.Second,
 	}
 	geocodingClient := geocoding.NewClient(httpClient)
 	openmeteoClient := openmeteo.NewClient(httpClient)
@@ -142,17 +156,24 @@ func createJobs(sheduler gocron.Scheduler, storage *Storage) ([]gocron.Job, erro
 					return
 				}
 
-				storage.mu.Lock()
-				defer storage.mu.Unlock()
-
-				timeStamp, err :=  time.Parse("2006-01-02T15:04 ", openResp.Current.Time)
+				//storage.mu.Lock()
+				//defer storage.mu.Unlock()
+				
+				timeStamp, err :=  time.Parse("2006-01-02T15:04", openResp.Current.Time)
 				if err != nil {
 					log.Println(err)
 					return 
 				}
 
-
-				storage.data[city] = append(storage.data[city], Data{Timestamp: timeStamp, Temperature: openResp.Current.Temperature2m})
+				query := `
+					INSERT INTO public.forecast (name, forecast_time, temperature) 
+					VALUES ($1, $2, $3);
+				`
+				_, err = conn.Exec(ctx, query, city, timeStamp, openResp.Current.Temperature2m)
+				if err != nil {
+					log.Println(err)
+					return
+				}
 
 				fmt.Printf("%v updated data in storage: %s\n", time.Now(), city)
 			},

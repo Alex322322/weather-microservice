@@ -1,0 +1,10 @@
+services:
+  pg:
+    image: postgres:18.0
+    restart: always
+    environment:
+      POSTGRES_USER: "user"
+      POSTGRES_PASSWORD: "pass"
+      POSTGRES_DB: "weather_db"
+    ports:
+      - 5432:5432
